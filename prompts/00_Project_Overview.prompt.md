@@ -18,7 +18,7 @@ Sources of truth:
 
 Cross-document data contracts:
 - Exports:
-  - GlobalSummary: 1 short paragraph describing purpose, users, problem, and high-level value. Use this as a canonical intro for other documents.
+  - GlobalSummary: 1-3 short paragraph describing purpose, users, problem, and high-level value. Use this as a canonical intro for other documents.
   - DocumentPreviews: a map of doc-name -> 3-6 bullets previewing likely contents.
 - Consumes: none.
 
@@ -42,33 +42,6 @@ Return format (Markdown):
 - Datastores: ... (evidence)
 - Messaging/Queues: ... (evidence)
 - Build/Runtime: ... (evidence)
-
-### Summaries of Other Documents
-- 01_Architecture_and_Interactions.md — 3-6 bullets on likely components, external systems, and interaction patterns.
-- 02_Data_Model_Schema.md — 3-6 bullets on main entities, key tables/collections, and relationships.
-- 03_File_Structure_Guide.md — 3-6 bullets on repository layout, apps/packages, infra, scripts.
-- 04_Key_Components_and_Logic.md — 3-6 bullets on critical modules/services and their responsibilities.
-- 05_Data_Flows.md — 3-6 bullets on one primary end-to-end flow and key steps.
-- 06_API_Endpoints.md — 3-6 bullets on routing style, notable endpoints, and versioning/auth.
-- 07_Security_Overview.md — 3-6 bullets on authN/Z, secrets, validation, data protection.
-- 08_Dependencies_and_Environment.md — 3-6 bullets on runtimes, env vars, external services.
-- 09_Testing_Strategy.md — 3-6 bullets on test types, frameworks, commands, coverage.
-- 10_Developer_Onboarding_Guide.md — 3-6 bullets on prerequisites, setup, run, smoke tests.
-- 11_Deployment_Guide.md — 3-6 bullets on build, environments, pipelines, health, rollback.
-
-### Table of Contents
-- 00_Project_Overview.md
-- 01_Architecture_and_Interactions.md
-- 02_Data_Model_Schema.md
-- 03_File_Structure_Guide.md
-- 04_Key_Components_and_Logic.md
-- 05_Data_Flows.md
-- 06_API_Endpoints.md
-- 07_Security_Overview.md
-- 08_Dependencies_and_Environment.md
-- 09_Testing_Strategy.md
-- 10_Developer_Onboarding_Guide.md
-- 11_Deployment_Guide.md
 
 Constraints & Quality Bar:
 - Be accurate, concise, and specific. Avoid speculation.

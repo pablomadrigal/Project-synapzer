@@ -2,23 +2,49 @@
 /* eslint-disable no-console */
 import fs from 'fs';
 import path from 'path';
-import readline from 'readline';
 import matter from 'gray-matter';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
+import { execSync } from 'child_process';
 
 dotenv.config();
 
+function showHelp() {
+  console.log(`
+Usage: node index.js [options]
+
+Options:
+  --dir <path>              Directory containing prompt files (default: ./prompts)
+  --model <model>            OpenAI model to use (default: gpt-5)
+  --repo <path|url>           Repository path or GitHub URL to analyze
+  --no-interaction            Run without human interaction (auto-approve all steps)
+  --no-interrupt              Alias for --no-interaction
+  --help, -h                  Show this help message
+
+Examples:
+  node index.js --dir ./my-prompts --repo ./my-project
+  node index.js --no-interaction --repo https://github.com/user/repo
+  node index.js --model gpt-4 --no-interrupt
+`);
+}
+
 function parseArgs(argv) {
-  const args = { dir: './prompts', model: process.env.OPENAI_MODEL || 'gpt-5' };
+  const args = { dir: './prompts', model: process.env.OPENAI_MODEL || 'gpt-5', repo: undefined, noInteraction: false };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--dir' && argv[i + 1]) args.dir = argv[++i];
+    if (arg === '--help' || arg === '-h') {
+      showHelp();
+      process.exit(0);
+    }
+    else if (arg === '--dir' && argv[i + 1]) args.dir = argv[++i];
     else if (arg.startsWith('--dir=')) args.dir = arg.split('=')[1];
     else if (arg === '--model' && argv[i + 1]) args.model = argv[++i];
     else if (arg.startsWith('--model=')) args.model = arg.split('=')[1];
+    else if (arg === '--repo' && argv[i + 1]) args.repo = argv[++i];
+    else if (arg.startsWith('--repo=')) args.repo = arg.split('=')[1];
+    else if (arg === '--no-interaction' || arg === '--no-interrupt') args.noInteraction = true;
   }
   return args;
 }
@@ -26,6 +52,87 @@ function parseArgs(argv) {
 function ensureDirectoryExists(targetPath) {
   if (!fs.existsSync(targetPath)) {
     fs.mkdirSync(targetPath, { recursive: true });
+  }
+}
+
+function sanitizeRepoName(input) {
+  try {
+    const url = new URL(input);
+    const parts = url.pathname.replace(/\.git$/, '').split('/').filter(Boolean);
+    return parts.slice(-2).join('-');
+  } catch (_) {
+    return input.replace(/[^a-zA-Z0-9-_.]/g, '-');
+  }
+}
+
+function buildRepoTree(root, maxDepth = 2, maxEntries = 400) {
+  const ignore = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'out', 'coverage', '.turbo', '.cache']);
+  const lines = [];
+  let count = 0;
+  function walk(dir, depth) {
+    if (depth > maxDepth || count >= maxEntries) return;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (count >= maxEntries) break;
+      if (ignore.has(e.name)) continue;
+      const p = path.join(dir, e.name);
+      const rel = path.relative(root, p) || '.';
+      lines.push(`${'  '.repeat(depth)}- ${rel}${e.isDirectory() ? '/' : ''}`);
+      count += 1;
+      if (e.isDirectory()) walk(p, depth + 1);
+    }
+  }
+  walk(root, 0);
+  return lines.join('\n');
+}
+
+async function obtainRepository(args) {
+  if (args.repo && fs.existsSync(args.repo) && fs.statSync(args.repo).isDirectory()) {
+    return { repoRoot: path.resolve(args.repo), source: 'local' };
+  }
+  if (args.repo && /^https?:\/\//.test(args.repo)) {
+    const reposDir = path.join(process.cwd(), 'repos');
+    ensureDirectoryExists(reposDir);
+    const name = sanitizeRepoName(args.repo);
+    const target = path.join(reposDir, `${name}-${Date.now()}`);
+    try {
+      console.log(chalk.gray(`Cloning ${args.repo} -> ${target}`));
+      execSync(`git clone --depth 1 ${args.repo} ${target}`, { stdio: 'inherit' });
+      return { repoRoot: target, source: 'cloned' };
+    } catch (e) {
+      console.error(chalk.red('Git clone failed:'), e.message);
+    }
+  }
+
+  const { mode } = await inquirer.prompt([
+    { type: 'list', name: 'mode', message: 'Select repository source:', choices: [
+      { name: 'Local path', value: 'local' },
+      { name: 'GitHub URL (will shallow clone)', value: 'url' },
+    ] }]);
+  if (mode === 'local') {
+    const { localPath } = await inquirer.prompt([
+      { type: 'input', name: 'localPath', message: 'Enter local repository path:' },
+    ]);
+    if (!localPath || !fs.existsSync(localPath) || !fs.statSync(localPath).isDirectory()) {
+      console.error(chalk.red('Invalid local path.'));
+      process.exit(1);
+    }
+    return { repoRoot: path.resolve(localPath), source: 'local' };
+  }
+  const { url } = await inquirer.prompt([
+    { type: 'input', name: 'url', message: 'Enter GitHub HTTPS URL (public or accessible):' },
+  ]);
+  const reposDir = path.join(process.cwd(), 'repos');
+  ensureDirectoryExists(reposDir);
+  const name = sanitizeRepoName(url);
+  const target = path.join(reposDir, `${name}-${Date.now()}`);
+  try {
+    console.log(chalk.gray(`Cloning ${url} -> ${target}`));
+    execSync(`git clone --depth 1 ${url} ${target}`, { stdio: 'inherit' });
+    return { repoRoot: target, source: 'cloned' };
+  } catch (e) {
+    console.error(chalk.red('Git clone failed:'), e.message);
+    process.exit(1);
   }
 }
 
@@ -83,7 +190,12 @@ function makeIdentityPreamble(identity) {
   return [role, persona, tone, expertise, context, constraints].filter(Boolean).join(' ');
 }
 
-async function askApproval(step, defaultChoice = 'Yes') {
+async function askApproval(step, defaultChoice = 'Yes', noInteraction = false) {
+  if (noInteraction) {
+    console.log(chalk.blue(`[Non-interactive mode] ${step} - Auto-proceeding with: ${defaultChoice}`));
+    return defaultChoice;
+  }
+  
   const choices = [
     { name: 'Yes - Proceed', value: 'Yes' },
     { name: 'Re-run', value: 'Re-run' },
@@ -146,22 +258,37 @@ async function run() {
   ensureDirectoryExists(contextDir);
   ensureDirectoryExists(summaryDir);
 
+  // Require repository before proceeding
+  const { repoRoot, source } = await obtainRepository(args);
+  const repoTree = buildRepoTree(repoRoot, 2, 400);
+  const repositoryContext = `### Repository Context\n- Root: ${repoRoot}\n- Source: ${source}\n\nDirectory tree (depth 2):\n\n\`\`\`\n${repoTree}\n\`\`\`\n`;
+  fs.writeFileSync(path.join(contextDir, 'repository-context.md'), repositoryContext, 'utf8');
+
   console.log(chalk.cyan.bold('\nPlan de Ejecución de Prompts'));
+  if (args.noInteraction) {
+    console.log(chalk.blue.bold('[NON-INTERACTIVE MODE ENABLED]'));
+    console.log(chalk.blue('All prompts will be executed automatically without human review'));
+  }
   console.log(chalk.white(`Carpeta seleccionada: ${promptsDir}`));
   console.log(chalk.white(`Total de prompts: ${promptFiles.length}`));
+  console.log(chalk.white(`Repositorio: ${repoRoot}`));
   promptFiles.forEach((pf, i) => {
     console.log(chalk.gray(`${i + 1}. ${pf.name}`));
   });
 
-  const { approvePlan } = await inquirer.prompt([
-    { type: 'confirm', name: 'approvePlan', message: '¿Proceder con esta secuencia?', default: true },
-  ]);
-  if (!approvePlan) {
-    console.log(chalk.yellow('Sequence cancelled by user.'));
-    process.exit(0);
+  if (!args.noInteraction) {
+    const { approvePlan } = await inquirer.prompt([
+      { type: 'confirm', name: 'approvePlan', message: '¿Proceder con esta secuencia?', default: true },
+    ]);
+    if (!approvePlan) {
+      console.log(chalk.yellow('Sequence cancelled by user.'));
+      process.exit(0);
+    }
+  } else {
+    console.log(chalk.blue('[Non-interactive mode] Auto-approving plan execution'));
   }
 
-  let accumulatedContext = '';
+  let accumulatedContext = repositoryContext;
   const sessionResults = [];
 
   for (let index = 0; index < promptFiles.length; index += 1) {
@@ -189,14 +316,12 @@ async function run() {
     if (identityPreamble) {
       console.log(chalk.gray('Identity applied:'), identityPreamble);
     }
-    console.log(chalk.gray('\n--- Prompt Content (processed) ---\n'));
-    console.log(workingContent);
     console.log(chalk.gray('\n---------------------------------\n'));
 
     let loop = true;
     let finalOutput = '';
     while (loop) {
-      const decision = await askApproval('Execute this prompt?');
+      const decision = await askApproval('Execute this prompt?', 'Yes', args.noInteraction);
       if (decision === 'Stop') {
         console.log(chalk.yellow('Session stopped by user.'));
         loop = false;
@@ -210,34 +335,67 @@ async function run() {
         break;
       }
       if (decision === 'Modify') {
-        workingContent = await editInEditor(workingContent);
-        continue;
+        if (args.noInteraction) {
+          console.log(chalk.yellow('[Non-interactive mode] Cannot modify prompts, proceeding with original'));
+          // In non-interactive mode, we can't modify, so just proceed
+          decision = 'Yes';
+        } else {
+          workingContent = await editInEditor(workingContent);
+          continue;
+        }
       }
       if (decision === 'Re-run' || decision === 'Yes') {
-        // Call OpenAI
+        // Call OpenAI with loading spinner
         try {
+          console.log(chalk.blue('🤖 AI is thinking...'));
+          
+          const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+          let spinnerIndex = 0;
+          
+          const spinnerInterval = setInterval(() => {
+            process.stdout.write(`\r${chalk.blue(spinner[spinnerIndex % spinner.length])} Processing...`);
+            spinnerIndex++;
+          }, 100);
+          
           const completion = await client.chat.completions.create({
             model: args.model,
             messages: [
               { role: 'system', content: systemMessage },
+              { role: 'user', content: repositoryContext },
               { role: 'user', content: workingContent },
             ],
           });
+          
+          clearInterval(spinnerInterval);
+          process.stdout.write('\r' + ' '.repeat(20) + '\r'); // Clear spinner line
+          
           finalOutput = completion.choices?.[0]?.message?.content || '';
           console.log(chalk.green('\n--- Result ---\n'));
           console.log(finalOutput);
           console.log(chalk.green('\n--------------\n'));
 
           // Ask for satisfaction
-          const { satisfied } = await inquirer.prompt([
-            { type: 'confirm', name: 'satisfied', message: '¿Estás satisfecho con este resultado? ¿Guardar y continuar?', default: true },
-          ]);
+          let satisfied = true;
+          if (!args.noInteraction) {
+            const satisfactionResponse = await inquirer.prompt([
+              { type: 'confirm', name: 'satisfied', message: '¿Estás satisfecho con este resultado? ¿Guardar y continuar?', default: true },
+            ]);
+            satisfied = satisfactionResponse.satisfied;
+          } else {
+            console.log(chalk.blue('[Non-interactive mode] Auto-accepting result'));
+          }
+          
           if (!satisfied) {
             // Allow rerun or modify
-            const next = await askApproval('Choose next action:', 'Re-run');
+            const next = await askApproval('Choose next action:', 'Re-run', args.noInteraction);
             if (next === 'Modify') {
-              workingContent = await editInEditor(workingContent);
-              continue;
+              if (args.noInteraction) {
+                console.log(chalk.yellow('[Non-interactive mode] Cannot modify prompts, proceeding with result'));
+                satisfied = true; // Force satisfaction in non-interactive mode
+              } else {
+                workingContent = await editInEditor(workingContent);
+                continue;
+              }
             }
             if (next === 'Re-run') {
               continue;
@@ -257,8 +415,7 @@ async function run() {
           // Save result
           const baseName = pf.name.replace(/\.md$/i, '');
           const outPath = path.join(resultsDir, `${baseName}.result.md`);
-          const presented = `# Resultado del Prompt: ${pf.name}\n\n## Identidad Aplicada:\n${identityPreamble ? identityPreamble : 'N/A'}\n\n## Prompt Ejecutado:\n${workingContent}\n\n## Resultado:\n${finalOutput}\n`;
-          fs.writeFileSync(outPath, presented, 'utf8');
+          fs.writeFileSync(outPath, finalOutput, 'utf8');
           sessionResults.push({ name: pf.name, path: outPath });
 
           // Update accumulated context (append brief header + result)
@@ -268,11 +425,17 @@ async function run() {
           loop = false;
         } catch (err) {
           console.error(chalk.red('OpenAI request failed:'), err.message);
-          const retry = await askApproval('OpenAI failed. Retry?', 'Re-run');
+          const retry = await askApproval('OpenAI failed. Retry?', 'Re-run', args.noInteraction);
           if (retry === 'Re-run') continue;
           if (retry === 'Modify') {
-            workingContent = await editInEditor(workingContent);
-            continue;
+            if (args.noInteraction) {
+              console.log(chalk.yellow('[Non-interactive mode] Cannot modify prompts, skipping due to error'));
+              finalOutput = '[Skipped due to error]';
+              loop = false;
+            } else {
+              workingContent = await editInEditor(workingContent);
+              continue;
+            }
           }
           if (retry === 'Skip') {
             finalOutput = '[Skipped due to error]';
@@ -289,8 +452,7 @@ async function run() {
       // Save minimal record
       const baseName = pf.name.replace(/\.md$/i, '');
       const outPath = path.join(resultsDir, `${baseName}.result.md`);
-      const presented = `# Resultado del Prompt: ${pf.name}\n\n## Prompt Ejecutado (resumen):\n${workingContent.slice(0, 500)}\n\n## Resultado:\n${finalOutput || '[No result]'}\n`;
-      fs.writeFileSync(outPath, presented, 'utf8');
+      fs.writeFileSync(outPath, finalOutput || '[No result]', 'utf8');
       sessionResults.push({ name: pf.name, path: outPath });
     }
   }
@@ -309,6 +471,9 @@ async function run() {
   fs.writeFileSync(summaryPath, summaryLines.join('\n'), 'utf8');
 
   console.log(chalk.green('\nAll done. Outputs saved under:'), outputBase);
+  if (args.noInteraction) {
+    console.log(chalk.blue('\n[Non-interactive mode] Session completed automatically'));
+  }
 }
 
 run().catch((e) => {

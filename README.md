@@ -14,10 +14,10 @@ yarn
 ### Run
 ```bash
 # Execute prompts in ./prompts
-yarn prompt-exec
+yarn prompt-exec --repo /path/to/local/repo
 
 # Or specify a custom directory
-yarn prompt-exec:dir --dir ./prompts
+yarn prompt-exec:dir --dir ./prompts --repo https://github.com/org/repo.git
 
 # Choose a different model
 OPENAI_MODEL=gpt-4o yarn prompt-exec
@@ -25,16 +25,18 @@ OPENAI_MODEL=gpt-4o yarn prompt-exec
 
 ### What it does
 - Lists `.md` files in the prompts directory (alphabetical)
+- Requires a repository (local path or GitHub URL) and builds a shallow context (tree depth 2)
 - For each prompt:
   - Extracts optional frontmatter identity and variables
   - Lets you review/modify the prompt
   - Runs it via OpenAI after approval
   - Asks for satisfaction/feedback and allows re-run/modify
-  - Saves results and accumulates context for subsequent prompts
+  - Saves results and accumulates context (including repo context) for subsequent prompts
 
 ### Outputs
 - `output/session-<timestamp>/results/*.result.md`
 - `output/session-<timestamp>/context/accumulated-context.md`
+- `output/session-<timestamp>/context/repository-context.md`
 - `output/session-<timestamp>/summary/session-summary.md`
 
 
