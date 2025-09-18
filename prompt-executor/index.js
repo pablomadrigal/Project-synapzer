@@ -8,6 +8,7 @@ import chalk from 'chalk';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
 import { execSync } from 'child_process';
+import { rmSync } from 'fs';
 
 dotenv.config();
 
@@ -62,6 +63,18 @@ function sanitizeRepoName(input) {
     return parts.slice(-2).join('-');
   } catch (_) {
     return input.replace(/[^a-zA-Z0-9-_.]/g, '-');
+  }
+}
+
+function cleanupTempRepository(repoRoot, source) {
+  if (source === 'cloned' && fs.existsSync(repoRoot)) {
+    try {
+      console.log(chalk.gray(`Cleaning up temporary repository: ${repoRoot}`));
+      rmSync(repoRoot, { recursive: true, force: true });
+      console.log(chalk.green('✓ Temporary repository cleaned up successfully'));
+    } catch (error) {
+      console.log(chalk.yellow(`⚠ Warning: Could not clean up temporary repository: ${error.message}`));
+    }
   }
 }
 
@@ -227,6 +240,9 @@ async function editInEditor(initial) {
   return edited;
 }
 
+// Global variable to track repository info for cleanup
+let repositoryInfo = null;
+
 async function run() {
   const args = parseArgs(process.argv);
   const promptsDir = path.resolve(process.cwd(), args.dir);
@@ -263,6 +279,9 @@ async function run() {
   const repoTree = buildRepoTree(repoRoot, 2, 400);
   const repositoryContext = `### Repository Context\n- Root: ${repoRoot}\n- Source: ${source}\n\nDirectory tree (depth 2):\n\n\`\`\`\n${repoTree}\n\`\`\`\n`;
   fs.writeFileSync(path.join(contextDir, 'repository-context.md'), repositoryContext, 'utf8');
+  
+  // Track repository info for cleanup
+  repositoryInfo = { repoRoot, source };
 
   console.log(chalk.cyan.bold('\nPlan de Ejecución de Prompts'));
   if (args.noInteraction) {
@@ -474,10 +493,17 @@ async function run() {
   if (args.noInteraction) {
     console.log(chalk.blue('\n[Non-interactive mode] Session completed automatically'));
   }
+  
+  // Clean up temporary repository if it was cloned
+  cleanupTempRepository(repositoryInfo.repoRoot, repositoryInfo.source);
 }
 
 run().catch((e) => {
   console.error(e);
+  // Try to clean up temporary repository even on error
+  if (repositoryInfo) {
+    cleanupTempRepository(repositoryInfo.repoRoot, repositoryInfo.source);
+  }
   process.exit(1);
 });
 

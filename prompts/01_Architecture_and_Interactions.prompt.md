@@ -30,14 +30,90 @@ Return format (Markdown):
 ### External Dependencies
 - Databases, caches, queues, identity providers, third-party APIs (with evidence).
 
-### Interactions Diagram
+### System Architecture Diagram
 ```mermaid
-flowchart LR
-  %% Replace with actual components and edges
-  A[Client] -->|HTTP| B[API]
-  B -->|DB Query| C[(Database)]
-  B -->|Publishes| D[[Queue]]
-  D --> E[Worker]
+graph TB
+    subgraph "Client Layer"
+        WEB[Web Browser]
+        MOBILE[Mobile App]
+        CLI[CLI Client]
+    end
+    
+    subgraph "API Gateway"
+        GATEWAY[API Gateway]
+        LOAD[Load Balancer]
+        RATE[Rate Limiter]
+    end
+    
+    subgraph "Core Services"
+        AUTH[Auth Service]
+        USER[User Service]
+        BUSINESS[Business Logic Service]
+        NOTIFY[Notification Service]
+    end
+    
+    subgraph "Data Services"
+        DB[(Primary Database)]
+        CACHE[(Redis Cache)]
+        SEARCH[(Search Engine)]
+        QUEUE[[Message Queue]]
+    end
+    
+    subgraph "External Integrations"
+        EMAIL[Email Provider]
+        SMS[SMS Provider]
+        PAYMENT[Payment Gateway]
+        THIRDPARTY[Third Party APIs]
+    end
+    
+    WEB --> LOAD
+    MOBILE --> LOAD
+    CLI --> LOAD
+    LOAD --> RATE
+    RATE --> GATEWAY
+    
+    GATEWAY --> AUTH
+    GATEWAY --> USER
+    GATEWAY --> BUSINESS
+    GATEWAY --> NOTIFY
+    
+    AUTH --> DB
+    AUTH --> CACHE
+    USER --> DB
+    USER --> CACHE
+    BUSINESS --> DB
+    BUSINESS --> QUEUE
+    NOTIFY --> QUEUE
+    
+    QUEUE --> EMAIL
+    QUEUE --> SMS
+    BUSINESS --> PAYMENT
+    BUSINESS --> THIRDPARTY
+    
+    DB --> SEARCH
+```
+
+### Component Interactions Flow
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Auth
+    participant Business
+    participant DB
+    participant Queue
+    participant External
+    
+    Client->>Gateway: HTTP Request
+    Gateway->>Auth: Validate Token
+    Auth->>DB: Check User Permissions
+    Auth-->>Gateway: Authorization Result
+    Gateway->>Business: Process Request
+    Business->>DB: Read/Write Data
+    Business->>Queue: Publish Event
+    Queue->>External: Async Notification
+    Business-->>Gateway: Response
+    Gateway-->>Client: HTTP Response
 ```
 
 Edge cases and guidance:
@@ -48,4 +124,5 @@ Edge cases and guidance:
 Constraints:
 - Favor clarity over completeness; avoid speculative details.
 - If unknown, label as Unknown.
+- Use Mermaid diagrams where it becomes useful/necessary.
 
